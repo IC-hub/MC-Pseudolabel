@@ -20,7 +20,6 @@ class LogitDensityRatioHClass:
         return self
     
     def regression(self, X, y):
-        # print (X.shape, y.shape)
         hvalue = self.clf.predict_proba(np.concatenate((X,y.reshape(-1,1)), axis=1))
         y_hat = LinearRegression().fit(hvalue, y).predict(hvalue)
         return y_hat
@@ -41,7 +40,6 @@ class RidgeDensityRatioHClass:
         return self
     
     def regression(self, X, y):
-        # print (X.shape, y.shape)
         hvalue = self.clf.predict_proba(np.concatenate((X,y.reshape(-1,1)), axis=1))
         y_hat = LinearRegression().fit(hvalue, y).predict(hvalue)
         return y_hat
@@ -62,13 +60,9 @@ class NeuralDensityRatioHClass:
             verbose=True,
             learning_rate_init=lr).fit(np.concatenate((X,y.reshape(-1,1)), axis=1), e)
         
-        # hvalue = self.clf.predict_proba(np.concatenate((X,y.reshape(-1,1)), axis=1))
-        # predict = np.argmax(hvalue, axis=1)
-        # print((predict == e).astype(int).mean())
         return self
     
     def regression(self, X, y):
-        # print (X.shape, y.shape)
         hvalue = self.clf.predict_proba(np.concatenate((X,y.reshape(-1,1)), axis=1))
         y_hat = LinearRegression().fit(hvalue, y).predict(hvalue)
         return y_hat
@@ -86,9 +80,6 @@ class GBDTDensityRatioHClass:
             random_state=self.seed, 
             verbose=True).fit(np.concatenate((X,y.reshape(-1,1)), axis=1), e)
         
-        # hvalue = self.clf.predict_proba(np.concatenate((X,y.reshape(-1,1)), axis=1))
-        # predict = np.argmax(hvalue, axis=1)
-        # print((predict == e).astype(int).mean())
         return self
     
     def predict(self, X, y):
@@ -139,7 +130,6 @@ class HardSampleHClass:
         return self
     
     def regression(self, X, y):
-        # print (X.shape, y.shape)
         hvalue = (self.model.predict(X)-y)**2
         y_hat = LinearRegression().fit(hvalue.reshape(-1,1), y).predict(hvalue.reshape(-1,1))
         return y_hat
@@ -153,9 +143,9 @@ class PovertyDensityRatioHClass:
         self.device = device
         self.predict_matrix = None
 
-    def fit(self, _dataset, lr=0.001, max_iter=1600, eval_steps=200, early_stop_steps=3): #1600
+    def fit(self, _dataset, lr=0.001, max_iter=400, eval_steps=200, early_stop_steps=3): #1600
         dataset = deepcopy(_dataset)
-        model = ResnetMS(num_classes=2)
+        model = ResnetMS(num_classes=2, input_label=True)
         model = model.to(self.device)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         iterator = iter(cycle(dataset.training_loader))
@@ -163,11 +153,12 @@ class PovertyDensityRatioHClass:
         best_step = max_iter - 1
         for i in range(max_iter):
             model.train()
-            input_batch, _, label_batch, _ = next(iterator)
+            input_batch, target_batch, label_batch, _ = next(iterator)
             input_batch = input_batch.to(self.device)
+            target_batch = target_batch.to(self.device)
             label_batch = label_batch.to(self.device).squeeze()
             
-            predict, _, _ = model(input_batch)
+            predict, _, _ = model(input_batch, target_batch)
             predict = predict.squeeze()
             loss = ce_loss_vanilla()(predict, label_batch, None)
             loss.backward()
@@ -183,12 +174,13 @@ class PovertyDensityRatioHClass:
                 label_list = []
                 with torch.no_grad():
                     for bundle_batch in dataset.validation_loader:
-                        input_batch, label_batch = bundle_batch[0], bundle_batch[2]
+                        input_batch, target_batch, label_batch = bundle_batch[0], bundle_batch[1], bundle_batch[2]
                         batch_size = input_batch.shape[0]
                         input_batch = input_batch.to(self.device)
+                        target_batch = target_batch.to(self.device)
                         label_batch = label_batch.to(self.device).squeeze()
                         sample += batch_size
-                        predict, _, _ = model(input_batch) # [batch_size]
+                        predict, _, _ = model(input_batch, target_batch) # [batch_size]
                         predict = predict.squeeze()
                         loss += ce_loss_vanilla()(predict, label_batch, None) * batch_size    
                         predict_list.append(predict)     
@@ -208,9 +200,10 @@ class PovertyDensityRatioHClass:
         predict_list = []
         with torch.no_grad():
             for bundle_batch in dataset.training_loader_sequential:
-                input_batch = bundle_batch[0]
+                input_batch, target_batch = bundle_batch[0], bundle_batch[1]
                 input_batch = input_batch.to(self.device)
-                predict, _, _ = model(input_batch) # [batch_size]
+                target_batch = target_batch.to(self.device)
+                predict, _, _ = model(input_batch, target_batch) # [batch_size]
                 predict = predict.squeeze()
                 predict = torch.softmax(predict, dim=1)
                 predict_list.append(predict)         
@@ -229,8 +222,6 @@ def apply_regression(args):
     X_subset = X[subset_mask]
     y_subset = y[subset_mask]
     res = h_class.regression(X_subset, y_subset)
-
-    # print(  ((y_subset-value)*(y_subset-value)).mean()   -    ((res - y_subset)*(res - y_subset)).mean())
 
     return res
 
@@ -270,14 +261,8 @@ def level_regression(h_class, X, y, f, n_proc=20):
     for value, result in zip(unique_values, results):
         if result is not None:   
             y_hat[f == value] = result
-            # print ('result', result, 'y_hat', y_hat[f == value])
-            # print (  ((y[f == value]-value)*(y[f == value]-value)).mean()   -    ((result- y[f == value])*(result- y[f == value])).mean() )
-
         else:
             raise NotImplementedError
-    
-    # print (  ((y-f)*(y-f)).mean()   -    ((y_hat - y)*(y_hat - y)).mean() )
-    # print (y_hat)
 
     return y_hat
 
@@ -344,3 +329,4 @@ def m_estimate_percentile(f, n_sample, percentile):
         m -= 5
         rounded_f = round_function(f, m)
     return m
+

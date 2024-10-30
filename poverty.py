@@ -1,3 +1,28 @@
+# Adapted from the code base: https://github.com/p-lambda/wilds
+
+# MIT License
+
+# Copyright (c) 2020 WILDS team
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+
 import os
 from copy import deepcopy
 import numpy as np
@@ -7,7 +32,7 @@ from torch.utils.data import DataLoader
 from wilds.common.data_loaders import get_eval_loader
 from wilds.datasets.poverty_dataset import PovertyMapDataset
 
-from resnet_multispectral import ResNet18
+from resnet_multispectral import ResNet18, ResNet18Label
 
 import torch
 from torch.utils.data import Dataset
@@ -15,7 +40,6 @@ from sklearn.neighbors import KernelDensity
 
 from model import Output
 
-# code base: https://github.com/p-lambda/wilds
 
 class Poverty_Batched_Dataset(Dataset):
     """
@@ -64,19 +88,6 @@ class Poverty_Batched_Dataset(Dataset):
         self.batch_size = batch_size
 
 
-    # def reset_batch(self):
-    #     """Reset batch indices for each domain."""
-    #     self.batch_indices, self.batches_left = {}, {}
-    #     for loc, d_idx in enumerate(self.domain_indices):
-    #         self.batch_indices[loc] = torch.split(d_idx[torch.randperm(len(d_idx))], self.batch_size)
-    #         self.batches_left[loc] = len(self.batch_indices[loc])
-
-    # def get_batch(self, domain):
-    #     """Return the next batch of the specified domain."""
-    #     batch_index = self.batch_indices[domain][len(self.batch_indices[domain]) - self.batches_left[domain]]
-    #     return torch.stack([self.transform(self.get_input(i)) for i in batch_index]), \
-    #            self.targets[batch_index], self.domains[batch_index]
-
     def get_input(self, idx):
         """Returns x for a given idx."""
         img = np.load(self.root / 'images' / f'landsat_poverty_img_{self.split_idx[idx]}.npz')['x']
@@ -87,7 +98,6 @@ class Poverty_Batched_Dataset(Dataset):
 
 
     def __getitem__(self, idx):
-        # print (self.domains[idx])
         return self.transform(self.get_input(idx)), \
                self.targets[idx], self.domain2idx[self.domains[idx].item()], idx
 
@@ -143,21 +153,22 @@ def initialize_poverty_train_transform():
 
 
 class ResnetMS(nn.Module):
-    def __init__(self, weights=None, num_classes=1):
+    def __init__(self, weights=None, num_classes=1, input_label=False):
         super(ResnetMS, self).__init__()
 
         #resnet18_ms
-        self.enc = ResNet18(num_classes=num_classes, num_channels=8)
-        # if weights is not None:
-        #     self.load_state_dict(deepcopy(weights))
+        if input_label:
+            self.enc = ResNet18Label(num_classes=num_classes, num_channels=8)
+        else:
+            self.enc = ResNet18(num_classes=num_classes, num_channels=8)
         
         self.output_layer = Output(num_classes, num_classes, init=1)
 
-    # def reset_weights(self, weights):
-    #     self.load_state_dict(deepcopy(weights))
-
-    def forward(self, x):
-        phi =  self.enc(x)
+    def forward(self, x, label=None):
+        if label is None:
+            phi =  self.enc(x)
+        else:
+            phi = self.enc(x, label)
         y = self.output_layer(phi)
         return y, phi, None
     
@@ -168,14 +179,13 @@ class ResnetMS(nn.Module):
         return self.output_layer
 
 class PovertyDataLoader:
-    def __init__(self, batch_size=64, path='/home/jiayunwu/multicalibration/C-Mixup/PovertyMap/wilds', workers=4, fold='A'):
+    def __init__(self, batch_size=64, path=None, workers=4, fold='A'):
         dataset = PovertyMapDataset(root_dir=path,
                                     download=True, no_nl=False, fold=fold, use_ood_val=False)
         # get all train data
         transform = initialize_poverty_train_transform()
 
         train_sets = Poverty_Batched_Dataset(dataset, 'train', batch_size, transform)
-        # print (train_sets.domain2idx)
         val_sets = Poverty_Batched_Dataset(dataset, 'val', batch_size, domain2idx=train_sets.domain2idx)
         test_sets = Poverty_Batched_Dataset(dataset, 'test', batch_size)
         datasets = {}
